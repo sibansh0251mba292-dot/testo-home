@@ -1,0 +1,497 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: deny everything by default
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Primitive Helpers ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        request.auth.token.email == 'sibansh.0251mba292@dgu.ac.in' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isOptionalString(data, field, maxLen) {
+      return !(field in data) || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isOptionalBool(data, field) {
+      return !(field in data) || data[field] is bool;
+    }
+
+    function isOptionalNumber(data, field) {
+      return !(field in data) || data[field] is number;
+    }
+
+    // --- Validation Blueprints ---
+
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'name', 'email', 'createdAt', 'lastLoginAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'name', 'email', 'photoURL', 'phone', 'preferredLanguage', 'createdAt', 'lastLoginAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && isOptionalString(data, 'photoURL', 500)
+        && isOptionalString(data, 'phone', 20)
+        && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'hi'])
+        && data.createdAt is timestamp
+        && data.lastLoginAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSavedAddress(data) {
+      return data.keys().hasAll(['userId', 'label', 'addressLine', 'pincode', 'isDefault', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'label', 'addressLine', 'landmark', 'pincode', 'isDefault', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.label is string && data.label.size() >= 1 && data.label.size() <= 40
+        && data.addressLine is string && data.addressLine.size() >= 5 && data.addressLine.size() <= 240
+        && isOptionalString(data, 'landmark', 120)
+        && data.pincode is string && data.pincode.size() == 6 && data.pincode.matches('^[0-9]{6}$')
+        && data.isDefault is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPatientProfile(data) {
+      return data.keys().hasAll(['userId', 'name', 'age', 'gender', 'relation', 'mobile', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'name', 'age', 'gender', 'relation', 'mobile', 'bloodGroup', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.age is number && data.age >= 0 && data.age <= 120
+        && data.gender in ['Male', 'Female', 'Other']
+        && data.relation is string && data.relation.size() >= 1 && data.relation.size() <= 40
+        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 15 && data.mobile.matches('^[0-9+\\-\\s]{10,15}$')
+        && isOptionalString(data, 'bloodGroup', 10)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDiagnosticTest(data) {
+      return data.keys().hasAll(['name', 'category', 'shortDescription', 'price', 'discountedPrice', 'isDemoPrice', 'preparation', 'fastingRequired', 'reportDeliveryHours', 'active', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'nameHi', 'category', 'shortDescription', 'shortDescriptionHi', 'price', 'discountedPrice', 'isDemoPrice', 'preparation', 'preparationHi', 'fastingRequired', 'fastingHours', 'reportDeliveryHours', 'sampleType', 'isPopular', 'active', 'updatedAt'])
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 140
+        && isOptionalString(data, 'nameHi', 160)
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
+        && data.shortDescription is string && data.shortDescription.size() >= 5 && data.shortDescription.size() <= 300
+        && isOptionalString(data, 'shortDescriptionHi', 360)
+        && data.price is number && data.price >= 0 && data.price <= 500000
+        && data.discountedPrice is number && data.discountedPrice >= 0 && data.discountedPrice <= data.price
+        && data.isDemoPrice is bool
+        && data.preparation is string && data.preparation.size() <= 300
+        && isOptionalString(data, 'preparationHi', 360)
+        && data.fastingRequired is bool
+        && isOptionalNumber(data, 'fastingHours')
+        && data.reportDeliveryHours is number && data.reportDeliveryHours >= 1 && data.reportDeliveryHours <= 720
+        && isOptionalString(data, 'sampleType', 60)
+        && isOptionalBool(data, 'isPopular')
+        && data.active is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidHealthPackage(data) {
+      return data.keys().hasAll(['name', 'description', 'includedTests', 'testCount', 'price', 'discountedPrice', 'isDemoPrice', 'fastingRequired', 'reportDeliveryHours', 'active', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'nameHi', 'tagline', 'description', 'descriptionHi', 'includedTests', 'testCount', 'price', 'discountedPrice', 'isDemoPrice', 'fastingRequired', 'fastingHours', 'reportDeliveryHours', 'isRecommended', 'active', 'updatedAt'])
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 140
+        && isOptionalString(data, 'nameHi', 160)
+        && isOptionalString(data, 'tagline', 160)
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 400
+        && isOptionalString(data, 'descriptionHi', 460)
+        && data.includedTests is list && data.includedTests.size() >= 1 && data.includedTests.size() <= 40 && data.includedTests[0] is string
+        && data.testCount is number && data.testCount >= 1 && data.testCount <= 200
+        && data.price is number && data.price >= 0 && data.price <= 500000
+        && data.discountedPrice is number && data.discountedPrice >= 0 && data.discountedPrice <= data.price
+        && data.isDemoPrice is bool
+        && data.fastingRequired is bool
+        && isOptionalNumber(data, 'fastingHours')
+        && data.reportDeliveryHours is number && data.reportDeliveryHours >= 1 && data.reportDeliveryHours <= 720
+        && isOptionalBool(data, 'isRecommended')
+        && data.active is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidBooking(data) {
+      return data.keys().hasAll([
+          'bookingCode', 'userId', 'items', 'totalAmount', 'discountAmount', 'finalAmount',
+          'patientName', 'patientAge', 'patientGender', 'patientMobile', 'addressLine', 'pincode',
+          'collectionDate', 'timeSlot', 'paymentMethod', 'paymentStatus', 'status',
+          'consentAccepted', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'bookingCode', 'userId', 'items', 'totalAmount', 'discountAmount', 'finalAmount', 'offerCode',
+          'patientName', 'patientAge', 'patientGender', 'patientMobile', 'addressLine', 'landmark', 'pincode',
+          'collectionDate', 'timeSlot', 'paymentMethod', 'paymentStatus', 'paymentReference',
+          'razorpayOrderId', 'razorpayPaymentId', 'status',
+          'assignedAgentId', 'assignedAgentName', 'assignedAgentPhone',
+          'rescheduleRequestedDate', 'rescheduleRequestedSlot', 'cancellationReason',
+          'consentAccepted', 'isDemoBooking', 'createdAt', 'updatedAt'
+        ])
+        && data.bookingCode is string && data.bookingCode.size() >= 4 && data.bookingCode.size() <= 32 && data.bookingCode.matches('^[A-Z0-9\\-]+$')
+        && isValidId(data.userId)
+        && data.items is list && data.items.size() >= 1 && data.items.size() <= 20 && data.items[0] is map
+        && data.totalAmount is number && data.totalAmount >= 0 && data.totalAmount <= 500000
+        && data.discountAmount is number && data.discountAmount >= 0 && data.discountAmount <= data.totalAmount
+        && data.finalAmount is number && data.finalAmount >= 0 && data.finalAmount <= data.totalAmount
+        && isOptionalString(data, 'offerCode', 32)
+        && data.patientName is string && data.patientName.size() >= 1 && data.patientName.size() <= 120
+        && data.patientAge is number && data.patientAge >= 0 && data.patientAge <= 120
+        && data.patientGender in ['Male', 'Female', 'Other']
+        && data.patientMobile is string && data.patientMobile.size() >= 10 && data.patientMobile.size() <= 15 && data.patientMobile.matches('^[0-9+\\-\\s]{10,15}$')
+        && data.addressLine is string && data.addressLine.size() >= 5 && data.addressLine.size() <= 240
+        && isOptionalString(data, 'landmark', 120)
+        && data.pincode is string && data.pincode.size() == 6 && data.pincode.matches('^[0-9]{6}$')
+        && data.collectionDate is string && data.collectionDate.size() == 10 && data.collectionDate.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+        && data.timeSlot is string && data.timeSlot.size() >= 3 && data.timeSlot.size() <= 60
+        && data.paymentMethod in ['UPI', 'Cash on Collection', 'Online Payment']
+        && data.paymentStatus in ['pending', 'awaiting_verification', 'paid', 'failed']
+        && isOptionalString(data, 'paymentReference', 120)
+        && isOptionalString(data, 'razorpayOrderId', 100)
+        && isOptionalString(data, 'razorpayPaymentId', 100)
+        && data.status in ['Pending', 'Confirmed', 'Phlebotomist Assigned', 'Sample Collected', 'Processing', 'Report Ready', 'Cancelled']
+        && isOptionalString(data, 'assignedAgentId', 128)
+        && isOptionalString(data, 'assignedAgentName', 120)
+        && isOptionalString(data, 'assignedAgentPhone', 20)
+        && isOptionalString(data, 'rescheduleRequestedDate', 10)
+        && isOptionalString(data, 'rescheduleRequestedSlot', 60)
+        && isOptionalString(data, 'cancellationReason', 240)
+        && data.consentAccepted is bool && data.consentAccepted == true
+        && isOptionalBool(data, 'isDemoBooking')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['userId', 'bookingId', 'bookingCode', 'patientName', 'reportTitle', 'fileName', 'issuedAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['userId', 'bookingId', 'bookingCode', 'patientName', 'reportTitle', 'testSummary', 'storagePath', 'downloadUrl', 'fileName', 'remarks', 'notified', 'issuedAt', 'createdAt', 'updatedAt'])
+        && isValidId(data.userId)
+        && isValidId(data.bookingId)
+        && data.bookingCode is string && data.bookingCode.size() >= 4 && data.bookingCode.size() <= 32
+        && data.patientName is string && data.patientName.size() >= 1 && data.patientName.size() <= 120
+        && data.reportTitle is string && data.reportTitle.size() >= 2 && data.reportTitle.size() <= 160
+        && isOptionalString(data, 'testSummary', 300)
+        && isOptionalString(data, 'storagePath', 300)
+        && isOptionalString(data, 'downloadUrl', 1000)
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160
+        && isOptionalString(data, 'remarks', 500)
+        && isOptionalBool(data, 'notified')
+        && data.issuedAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPhlebotomist(data) {
+      return data.keys().hasAll(['name', 'phone', 'certificationCode', 'zonePincodes', 'active', 'updatedAt'])
+        && data.keys().hasOnly(['name', 'phone', 'certificationCode', 'zonePincodes', 'active', 'updatedAt'])
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.phone is string && data.phone.size() >= 10 && data.phone.size() <= 15 && data.phone.matches('^[0-9+\\-\\s]{10,15}$')
+        && data.certificationCode is string && data.certificationCode.size() >= 2 && data.certificationCode.size() <= 40
+        && data.zonePincodes is list && data.zonePincodes.size() <= 50 && (data.zonePincodes.size() == 0 || data.zonePincodes[0] is string)
+        && data.active is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidServiceablePincode(data) {
+      return data.keys().hasAll(['pincode', 'city', 'area', 'serviceFee', 'active', 'updatedAt'])
+        && data.keys().hasOnly(['pincode', 'city', 'area', 'serviceFee', 'active', 'updatedAt'])
+        && data.pincode is string && data.pincode.size() == 6 && data.pincode.matches('^[0-9]{6}$')
+        && data.city is string && data.city.size() >= 2 && data.city.size() <= 80
+        && data.area is string && data.area.size() >= 2 && data.area.size() <= 120
+        && data.serviceFee is number && data.serviceFee >= 0 && data.serviceFee <= 5000
+        && data.active is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidTimeSlot(data) {
+      return data.keys().hasAll(['label', 'startTime', 'endTime', 'maxBookings', 'active', 'updatedAt'])
+        && data.keys().hasOnly(['label', 'startTime', 'endTime', 'maxBookings', 'active', 'updatedAt'])
+        && data.label is string && data.label.size() >= 3 && data.label.size() <= 60
+        && data.startTime is string && data.startTime.size() >= 3 && data.startTime.size() <= 20
+        && data.endTime is string && data.endTime.size() >= 3 && data.endTime.size() <= 20
+        && data.maxBookings is number && data.maxBookings >= 1 && data.maxBookings <= 500
+        && data.active is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOffer(data) {
+      return data.keys().hasAll(['title', 'code', 'discountPercent', 'maxDiscount', 'description', 'active', 'updatedAt'])
+        && data.keys().hasOnly(['title', 'titleHi', 'code', 'discountPercent', 'maxDiscount', 'description', 'active', 'updatedAt'])
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 120
+        && isOptionalString(data, 'titleHi', 140)
+        && data.code is string && data.code.size() >= 2 && data.code.size() <= 32 && data.code.matches('^[A-Z0-9_\\-]+$')
+        && data.discountPercent is number && data.discountPercent >= 1 && data.discountPercent <= 90
+        && data.maxDiscount is number && data.maxDiscount >= 0 && data.maxDiscount <= 50000
+        && data.description is string && data.description.size() <= 240
+        && data.active is bool
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminMember(data) {
+      return data.keys().hasAll(['uid', 'email', 'name', 'createdAt'])
+        && data.keys().hasOnly(['uid', 'email', 'name', 'createdAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.createdAt is timestamp;
+    }
+
+    function isValidOperationalConfig(data) {
+      return data.keys().hasAll(['liveBookingsEnabled', 'labConfigured', 'staffConfigured', 'pricingConfigured', 'locationsConfigured', 'updatedAt'])
+        && data.keys().hasOnly(['liveBookingsEnabled', 'labConfigured', 'staffConfigured', 'pricingConfigured', 'locationsConfigured', 'supportPhone', 'supportWhatsApp', 'supportEmail', 'updatedAt'])
+        && data.liveBookingsEnabled is bool
+        && data.labConfigured is bool
+        && data.staffConfigured is bool
+        && data.pricingConfigured is bool
+        && data.locationsConfigured is bool
+        && isOptionalString(data, 'supportPhone', 20)
+        && isOptionalString(data, 'supportWhatsApp', 20)
+        && isOptionalString(data, 'supportEmail', 120)
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // 1. Users & Addresses (PII isolated to owner or admin)
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isVerifiedUser()
+        && isValidId(userId)
+        && isOwner(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == request.auth.uid
+        && incoming().email == request.auth.token.email
+        && incoming().createdAt == request.time
+        && incoming().lastLoginAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(userId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && incoming().email == existing().email
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'photoURL', 'phone', 'preferredLanguage', 'lastLoginAt', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+
+      match /addresses/{addressId} {
+        allow get: if isValidId(userId) && isValidId(addressId) && (isOwner(userId) || isAdmin());
+        allow list: if isValidId(userId) && (isOwner(userId) || isAdmin());
+        allow create: if isVerifiedUser()
+          && isValidId(userId) && isValidId(addressId)
+          && isOwner(userId)
+          && exists(/databases/$(database)/documents/users/$(userId))
+          && isValidSavedAddress(incoming())
+          && incoming().userId == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isVerifiedUser()
+          && isValidId(userId) && isValidId(addressId)
+          && isOwner(userId)
+          && isValidSavedAddress(incoming())
+          && incoming().userId == existing().userId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['label', 'addressLine', 'landmark', 'pincode', 'isDefault', 'updatedAt']);
+        allow delete: if isValidId(userId) && isValidId(addressId) && (isOwner(userId) || isAdmin());
+      }
+    }
+
+    // 2. Family Patients (PII isolated to owner or admin)
+    match /patients/{patientId} {
+      allow get: if isValidId(patientId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidId(patientId)
+        && isValidPatientProfile(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(patientId)
+        && isValidPatientProfile(incoming())
+        && incoming().userId == existing().userId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'age', 'gender', 'relation', 'mobile', 'bloodGroup', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(patientId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+    }
+
+    // 3. Catalogue: Blood Tests & Health Packages & Offers & Pincodes & Slots & Settings (Public read, Admin write)
+    match /tests/{testId} {
+      allow get: if isValidId(testId);
+      allow list: if true;
+      allow create: if isAdmin() && isValidId(testId) && isValidDiagnosticTest(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(testId) && isValidDiagnosticTest(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(testId);
+    }
+
+    match /packages/{packageId} {
+      allow get: if isValidId(packageId);
+      allow list: if true;
+      allow create: if isAdmin() && isValidId(packageId) && isValidHealthPackage(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(packageId) && isValidHealthPackage(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(packageId);
+    }
+
+    match /offers/{offerId} {
+      allow get: if isValidId(offerId);
+      allow list: if true;
+      allow create: if isAdmin() && isValidId(offerId) && isValidOffer(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(offerId) && isValidOffer(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(offerId);
+    }
+
+    match /serviceable_pincodes/{pincode} {
+      allow get: if pincode is string && pincode.size() == 6;
+      allow list: if true;
+      allow create: if isAdmin() && pincode.matches('^[0-9]{6}$') && isValidServiceablePincode(incoming()) && incoming().pincode == pincode && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && pincode.matches('^[0-9]{6}$') && isValidServiceablePincode(incoming()) && incoming().pincode == existing().pincode && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && pincode.matches('^[0-9]{6}$');
+    }
+
+    match /time_slots/{slotId} {
+      allow get: if isValidId(slotId);
+      allow list: if true;
+      allow create: if isAdmin() && isValidId(slotId) && isValidTimeSlot(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(slotId) && isValidTimeSlot(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(slotId);
+    }
+
+    match /settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && isValidId(settingId) && isValidOperationalConfig(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // 4. Bookings (Owner or Admin only, Action-Based Updates + Terminal State Locking)
+    match /bookings/{bookingId} {
+      allow get: if isValidId(bookingId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isVerifiedUser()
+        && isValidId(bookingId)
+        && isValidBooking(incoming())
+        && incoming().userId == request.auth.uid
+        && incoming().status == 'Pending'
+        && incoming().paymentStatus == 'pending'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerifiedUser()
+        && isValidId(bookingId)
+        && isValidBooking(incoming())
+        && (
+          isAdmin() ||
+          (
+            existing().userId == request.auth.uid
+            && incoming().userId == existing().userId
+            && incoming().bookingCode == existing().bookingCode
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && existing().status != 'Cancelled'
+            && existing().status != 'Report Ready'
+            && (
+              // Action 1: Customer requests reschedule
+              (
+                existing().status in ['Pending', 'Confirmed', 'Phlebotomist Assigned']
+                && incoming().status == existing().status
+                && incoming().paymentStatus == existing().paymentStatus
+                && incoming().diff(existing()).affectedKeys().hasOnly(['rescheduleRequestedDate', 'rescheduleRequestedSlot', 'updatedAt'])
+              ) ||
+              // Action 2: Customer cancels pending or confirmed booking
+              (
+                existing().status in ['Pending', 'Confirmed']
+                && incoming().status == 'Cancelled'
+                && incoming().paymentStatus == existing().paymentStatus
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'cancellationReason', 'updatedAt'])
+              ) ||
+              // Action 3: Customer submits UPI/Razorpay payment proof awaiting verification
+              (
+                existing().paymentStatus == 'pending'
+                && incoming().paymentStatus == 'awaiting_verification'
+                && incoming().status == existing().status
+                && incoming().diff(existing()).affectedKeys().hasOnly(['paymentStatus', 'paymentReference', 'razorpayOrderId', 'razorpayPaymentId', 'updatedAt'])
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(bookingId) && isAdmin();
+    }
+
+    // 5. Diagnostic Reports (Strictly owner read, Admin write only)
+    match /reports/{reportId} {
+      allow get: if isValidId(reportId) && (isAdmin() || (isSignedIn() && existing().userId == request.auth.uid));
+      allow list: if isAdmin() || (isSignedIn() && resource.data.userId == request.auth.uid);
+      allow create: if isAdmin()
+        && isValidId(reportId)
+        && isValidReport(incoming())
+        && exists(/databases/$(database)/documents/bookings/$(incoming().bookingId))
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(reportId)
+        && isValidReport(incoming())
+        && incoming().userId == existing().userId
+        && incoming().bookingId == existing().bookingId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(reportId);
+    }
+
+    // 6. Phlebotomists (Admin-only PII protection)
+    match /phlebotomists/{phlebotomistId} {
+      allow get: if isValidId(phlebotomistId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidId(phlebotomistId) && isValidPhlebotomist(incoming()) && incoming().updatedAt == request.time;
+      allow update: if isAdmin() && isValidId(phlebotomistId) && isValidPhlebotomist(incoming()) && incoming().updatedAt == request.time;
+      allow delete: if isAdmin() && isValidId(phlebotomistId);
+    }
+
+    // 7. Admins Registry (Protected RBAC)
+    match /admins/{adminUid} {
+      allow get: if isValidId(adminUid) && (isOwner(adminUid) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isAdmin() && isValidId(adminUid) && isValidAdminMember(incoming()) && incoming().uid == adminUid && incoming().createdAt == request.time;
+      allow update: if isAdmin() && isValidId(adminUid) && isValidAdminMember(incoming()) && incoming().uid == existing().uid && incoming().createdAt == existing().createdAt;
+      allow delete: if isAdmin() && isValidId(adminUid);
+    }
+  }
+}

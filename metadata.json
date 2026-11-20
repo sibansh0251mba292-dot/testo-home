@@ -1,0 +1,6 @@
+{
+  "name": "Testo Home",
+  "description": "Testo Home – Blood Test & Home Sample Collection Service. Book blood tests from home, schedule trained phlebotomists, and securely access diagnostic reports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
